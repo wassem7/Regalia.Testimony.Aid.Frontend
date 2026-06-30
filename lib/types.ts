@@ -105,7 +105,7 @@ export function roleValue(role: AdminRole): string {
 }
 
 /** Roles selectable when adding an admin. */
-export const ADMIN_ROLES: AdminRole[] = ["Admin", "Super Admin", "Viewer"];
+export const ADMIN_ROLES: AdminRole[] = ["Admin", "Super Admin"];
 
 /** Raw profile from GET /api/admin/testimony-aid/profile. */
 export interface ApiProfile {
