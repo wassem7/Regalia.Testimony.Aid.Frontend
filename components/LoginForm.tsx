@@ -106,7 +106,7 @@ export default function LoginForm() {
       </div>
 
       <p className="auth-foot">
-        Access is granted by a Super Admin.
+        © 2026 Tech Ambition. All rights reserved.
       </p>
     </div>
   );
