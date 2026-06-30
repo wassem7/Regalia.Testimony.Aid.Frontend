@@ -46,7 +46,7 @@ export default function TestimonyRow({ testimony: t, onOpen, onApprove }: Props)
                 <span className="att">
                   {t.attachmentType === "image" && <span className="thumb striped" />}
                   {t.attachmentType === "document" && <DocumentIcon />}
-                  {t.attachmentUrl}
+                  <span className="att-url">This testimony has an attachment</span>
                 </span>
                 <span className="dot" />
               </>

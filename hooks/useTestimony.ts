@@ -1,14 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiConfigured, apiFetch } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { seedTestimonies } from "@/lib/seed";
 import type { AdminUpdateTestimonyPayload, Testimony } from "@/lib/types";
 
-interface State {
-  testimony: Testimony | null;
-  loading: boolean;
-  error: string | null;
+async function fetchTestimony(id: string): Promise<Testimony> {
+  if (!apiConfigured) {
+    await new Promise((r) => setTimeout(r, 400));
+    const found = seedTestimonies().find((t) => t.id === id);
+    if (!found) throw new Error("Testimony not found");
+    return found;
+  }
+  return apiFetch<Testimony>(`/api/testimony-aid/${id}`);
 }
 
 /**
@@ -16,69 +21,39 @@ interface State {
  * Falls back to local seed data when no backend is configured.
  */
 export function useTestimony(id: string) {
-  const [state, setState] = useState<State>({
-    testimony: null,
-    loading: true,
-    error: null,
+  const queryClient = useQueryClient();
+
+  const query = useQuery({
+    queryKey: queryKeys.testimony(id),
+    queryFn: () => fetchTestimony(id),
+    enabled: id.length > 0,
   });
 
-  const load = useCallback(
-    async (signal?: { cancelled: boolean }) => {
-      const commit = (next: State) => {
-        if (!signal?.cancelled) setState(next);
-      };
-
-      if (!apiConfigured) {
-        await new Promise((r) => setTimeout(r, 400));
-        const found = seedTestimonies().find((t) => t.id === id) ?? null;
-        commit({
-          testimony: found,
-          loading: false,
-          error: found ? null : "Testimony not found",
-        });
-        return;
-      }
-
-      try {
-        const testimony = await apiFetch<Testimony>(`/api/testimony-aid/${id}`);
-        commit({ testimony, loading: false, error: null });
-      } catch (err) {
-        commit({
-          testimony: null,
-          loading: false,
-          error: err instanceof Error ? err.message : "Failed to load testimony",
-        });
-      }
+  const updateMutation = useMutation({
+    mutationFn: async (payload: AdminUpdateTestimonyPayload) => {
+      if (!apiConfigured) return;
+      await apiFetch(`/api/testimony-aid/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
     },
-    [id],
-  );
-
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void load(signal);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [load]);
-
-  const reload = useCallback(() => {
-    setState((s) => ({ ...s, loading: true, error: null }));
-    void load();
-  }, [load]);
-
-  /** Admin-edit this testimony, then refresh it. */
-  const update = useCallback(
-    async (payload: AdminUpdateTestimonyPayload) => {
-      if (apiConfigured) {
-        await apiFetch(`/api/testimony-aid/${id}`, {
-          method: "PATCH",
-          body: JSON.stringify(payload),
-        });
-      }
-      await load();
+    // Refresh this testimony and the shared list once the edit lands.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.testimony(id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.testimonies });
     },
-    [id, load],
-  );
+  });
 
-  return { ...state, reload, update };
+  return {
+    testimony: query.data ?? null,
+    loading: query.isLoading,
+    error: query.error
+      ? query.error instanceof Error
+        ? query.error.message
+        : "Failed to load testimony"
+      : null,
+    reload: () => query.refetch(),
+    update: (payload: AdminUpdateTestimonyPayload) =>
+      updateMutation.mutateAsync(payload),
+  };
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiConfigured, apiFetch } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { seedTestimonies } from "@/lib/seed";
 import type { PagedResult, Testimony } from "@/lib/types";
 
@@ -11,14 +12,6 @@ export interface TestimonyStats {
   approvedThisWeek: number;
 }
 
-interface State {
-  testimonies: Testimony[];
-  stats: TestimonyStats;
-  loading: boolean;
-  error: string | null;
-  lastUpdated: number | null;
-}
-
 const EMPTY_STATS: TestimonyStats = {
   pendingCount: 0,
   liveTotal: 0,
@@ -26,8 +19,8 @@ const EMPTY_STATS: TestimonyStats = {
 };
 
 /**
- * Stat counters for the queue header. Reads the wall clock, so it is computed
- * at load time (off the render path) rather than during render.
+ * Stat counters for the queue header. Reads the wall clock, so it is derived
+ * from the fetched list rather than stored.
  */
 function computeStats(testimonies: Testimony[]): TestimonyStats {
   const weekAgo = Date.now() - 7 * 86400_000;
@@ -46,106 +39,81 @@ function computeStats(testimonies: Testimony[]): TestimonyStats {
   return { pendingCount, liveTotal, approvedThisWeek };
 }
 
+/** Fetches the admin testimony list. Falls back to seed data with no backend. */
+async function fetchTestimonies(): Promise<Testimony[]> {
+  if (!apiConfigured) {
+    // Simulate a brief load so skeletons are visible in standalone mode.
+    await new Promise((r) => setTimeout(r, 700));
+    return seedTestimonies();
+  }
+  const page = await apiFetch<PagedResult<Testimony>>(
+    "/api/testimony-aid?pageSize=100",
+  );
+  return page.items;
+}
+
 /**
  * Loads the admin testimony list and exposes an approve action.
- * Falls back to local seed data when no backend is configured.
+ * Backed by TanStack Query, so the list is fetched once and shared (cached)
+ * across every route that reads it.
  */
 export function useTestimonies() {
-  const [state, setState] = useState<State>({
-    testimonies: [],
-    stats: EMPTY_STATS,
-    loading: true,
-    error: null,
-    lastUpdated: null,
+  const queryClient = useQueryClient();
+
+  const query = useQuery({
+    queryKey: queryKeys.testimonies,
+    queryFn: fetchTestimonies,
   });
 
-  const load = useCallback(async (signal?: { cancelled: boolean }) => {
-    const commit = (next: State) => {
-      if (!signal?.cancelled) setState(next);
-    };
+  const testimonies = query.data ?? [];
+  const stats = query.data ? computeStats(query.data) : EMPTY_STATS;
 
-    if (!apiConfigured) {
-      // Simulate a brief load so skeletons are visible in standalone mode.
-      await new Promise((r) => setTimeout(r, 700));
-      const items = seedTestimonies();
-      commit({
-        testimonies: items,
-        stats: computeStats(items),
-        loading: false,
-        error: null,
-        lastUpdated: Date.now(),
-      });
-      return;
-    }
-
-    try {
-      const page = await apiFetch<PagedResult<Testimony>>(
-        "/api/testimony-aid?pageSize=100",
-      );
-      commit({
-        testimonies: page.items,
-        stats: computeStats(page.items),
-        loading: false,
-        error: null,
-        lastUpdated: Date.now(),
-      });
-    } catch (err) {
-      commit({
-        testimonies: [],
-        stats: EMPTY_STATS,
-        loading: false,
-        error: err instanceof Error ? err.message : "Failed to load testimonies",
-        lastUpdated: null,
-      });
-    }
-  }, []);
-
-  // Fetch on mount using the canonical cancellable-effect pattern.
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void load(signal);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [load]);
-
-  const reload = useCallback(() => {
-    setState((s) => ({ ...s, loading: true, error: null }));
-    void load();
-  }, [load]);
-
-  /** Approve (publish) a testimony. Optimistic; reverts on failure. */
-  const approve = useCallback(
-    async (id: string) => {
-      const nowIso = new Date().toISOString();
-      const prev = state.testimonies;
-
-      setState((s) => {
-        const testimonies = s.testimonies.map((t) =>
-          t.id === id ? { ...t, status: "accepted" as const, approvedAt: nowIso } : t,
-        );
-        return { ...s, testimonies, stats: computeStats(testimonies) };
-      });
-
+  const approveMutation = useMutation({
+    mutationFn: async (id: string) => {
       if (!apiConfigured) return;
-
       try {
         await apiFetch(`/api/testimony-aid/${id}/approve`, { method: "POST" });
       } catch {
-        setState((s) => ({ ...s, testimonies: prev, stats: computeStats(prev) }));
         throw new Error("Could not publish — please try again.");
       }
     },
-    [state.testimonies],
-  );
+    // Optimistically flip the row to accepted; revert the cache on failure.
+    onMutate: async (id: string) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.testimonies });
+      const previous = queryClient.getQueryData<Testimony[]>(
+        queryKeys.testimonies,
+      );
+      const nowIso = new Date().toISOString();
+      queryClient.setQueryData<Testimony[]>(queryKeys.testimonies, (old) =>
+        (old ?? []).map((t) =>
+          t.id === id
+            ? { ...t, status: "accepted" as const, approvedAt: nowIso }
+            : t,
+        ),
+      );
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.testimonies, context.previous);
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.testimonies });
+    },
+  });
 
   return {
-    testimonies: state.testimonies,
-    loading: state.loading,
-    error: state.error,
-    stats: state.stats,
-    lastUpdated: state.lastUpdated,
-    reload,
-    approve,
+    testimonies,
+    loading: query.isLoading,
+    error: query.error ? errorMessage(query.error) : null,
+    stats,
+    lastUpdated: query.dataUpdatedAt || null,
+    reload: () => query.refetch(),
+    approve: (id: string) => approveMutation.mutateAsync(id),
   };
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : "Failed to load testimonies";
 }

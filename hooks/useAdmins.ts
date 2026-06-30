@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiConfigured, apiFetch } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { seedAdmins } from "@/lib/seed";
 import {
   roleValue,
@@ -11,90 +12,77 @@ import {
   type ApiAdmin,
 } from "@/lib/types";
 
+async function fetchAdmins(): Promise<Admin[]> {
+  if (!apiConfigured) return seedAdmins();
+  try {
+    const rows = await apiFetch<ApiAdmin[]>("/api/testimony-aid-admin");
+    return rows.map(toAdmin);
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Loads the testimony-aid admin list and exposes toggle/remove actions.
+ * Loads the testimony-aid admin list and exposes toggle/remove/add actions.
  * Falls back to local seed data when no backend is configured.
  */
 export function useAdmins() {
-  const [admins, setAdmins] = useState<Admin[]>([]);
-  const [loading, setLoading] = useState(true);
+  const queryClient = useQueryClient();
 
-  const load = useCallback(async (signal?: { cancelled: boolean }) => {
-    const setIfLive = <T,>(setter: (v: T) => void, value: T) => {
-      if (!signal?.cancelled) setter(value);
-    };
+  const query = useQuery({
+    queryKey: queryKeys.admins,
+    queryFn: fetchAdmins,
+  });
 
-    if (!apiConfigured) {
-      setIfLive(setAdmins, seedAdmins());
-      setIfLive(setLoading, false);
-      return;
-    }
-    try {
-      const rows = await apiFetch<ApiAdmin[]>("/api/testimony-aid-admin");
-      setIfLive(setAdmins, rows.map(toAdmin));
-    } catch {
-      setIfLive(setAdmins, []);
-    } finally {
-      setIfLive(setLoading, false);
-    }
-  }, []);
+  const admins = query.data ?? [];
 
-  // Fetch on mount using the canonical cancellable-effect pattern.
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void load(signal);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [load]);
+  const setAdmins = (updater: (prev: Admin[]) => Admin[]) =>
+    queryClient.setQueryData<Admin[]>(queryKeys.admins, (old) =>
+      updater(old ?? []),
+    );
 
-  const reload = useCallback(() => {
-    setLoading(true);
-    void load();
-  }, [load]);
-
-  const toggle = useCallback(
-    async (id: string) => {
+  const toggleMutation = useMutation({
+    mutationFn: async (id: string) => {
       const target = admins.find((a) => a.id === id);
-      if (!target) return;
-
+      if (!apiConfigured || !target) return;
+      // Deactivation maps to the backend soft-delete; reactivation re-adds.
+      if (target.isActive) {
+        await apiFetch(`/api/testimony-aid-admin/${id}`, { method: "DELETE" });
+      }
+    },
+    onMutate: (id: string) => {
+      const previous = admins;
       setAdmins((prev) =>
         prev.map((a) => (a.id === id ? { ...a, isActive: !a.isActive } : a)),
       );
-
-      if (!apiConfigured) return;
-      // Deactivation maps to the backend soft-delete; reactivation re-adds.
-      try {
-        if (target.isActive) {
-          await apiFetch(`/api/testimony-aid-admin/${id}`, { method: "DELETE" });
-        }
-      } catch {
-        setAdmins((prev) =>
-          prev.map((a) => (a.id === id ? { ...a, isActive: target.isActive } : a)),
-        );
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.admins, context.previous);
       }
     },
-    [admins],
-  );
+  });
 
-  const remove = useCallback(
-    async (id: string) => {
-      const prev = admins;
-      setAdmins((cur) => cur.filter((a) => a.id !== id));
-
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => {
       if (!apiConfigured) return;
-      try {
-        await apiFetch(`/api/testimony-aid-admin/${id}`, { method: "DELETE" });
-      } catch {
-        setAdmins(prev);
+      await apiFetch(`/api/testimony-aid-admin/${id}`, { method: "DELETE" });
+    },
+    onMutate: (id: string) => {
+      const previous = admins;
+      setAdmins((prev) => prev.filter((a) => a.id !== id));
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(queryKeys.admins, context.previous);
       }
     },
-    [admins],
-  );
+  });
 
-  /** Add an admin by TKN + role. Throws (with the API message) on failure. */
-  const add = useCallback(
-    async (tkn: string, role: AdminRole) => {
+  const addMutation = useMutation({
+    mutationFn: async ({ tkn, role }: { tkn: string; role: AdminRole }) => {
       if (!apiConfigured) {
         setAdmins((cur) => [
           {
@@ -109,16 +97,25 @@ export function useAdmins() {
         ]);
         return;
       }
-
       await apiFetch("/api/testimony-aid-admin", {
         method: "POST",
         body: JSON.stringify({ tkn, role: roleValue(role) }),
       });
-      // Reload so the row shows the member's real name (not just the TKN).
-      await load();
     },
-    [load],
-  );
+    // Reload so the row shows the member's real name (not just the TKN).
+    onSuccess: () => {
+      if (apiConfigured) {
+        queryClient.invalidateQueries({ queryKey: queryKeys.admins });
+      }
+    },
+  });
 
-  return { admins, loading, reload, toggle, remove, add };
+  return {
+    admins,
+    loading: query.isLoading,
+    reload: () => query.refetch(),
+    toggle: (id: string) => toggleMutation.mutateAsync(id),
+    remove: (id: string) => removeMutation.mutateAsync(id),
+    add: (tkn: string, role: AdminRole) => addMutation.mutateAsync({ tkn, role }),
+  };
 }

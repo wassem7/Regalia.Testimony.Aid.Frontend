@@ -4,10 +4,7 @@ import { useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Sidebar from "@/components/Sidebar";
 import Topbar from "@/components/Topbar";
-import {
-  TestimoniesProvider,
-  useTestimoniesContext,
-} from "@/hooks/TestimoniesProvider";
+import { useTestimonies } from "@/hooks/useTestimonies";
 import { useProfile } from "@/hooks/useProfile";
 import { useRequireAuth } from "@/hooks/useRequireAuth";
 import { logout } from "@/lib/auth";
@@ -23,7 +20,7 @@ function DashboardChrome({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const profile = useProfile();
-  const { stats } = useTestimoniesContext();
+  const { stats } = useTestimonies();
 
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -62,9 +59,5 @@ export default function DashboardLayout({
   // Avoid flashing the dashboard before the auth check resolves.
   if (!authed) return null;
 
-  return (
-    <TestimoniesProvider>
-      <DashboardChrome>{children}</DashboardChrome>
-    </TestimoniesProvider>
-  );
+  return <DashboardChrome>{children}</DashboardChrome>;
 }

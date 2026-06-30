@@ -474,8 +474,18 @@ body {
   border: 1px solid var(--line);
   padding: 3px 8px;
   border-radius: 7px;
+  max-width: 100%;
+}
+.att > svg {
+  flex-shrink: 0;
+}
+.att-url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .thumb {
+  flex-shrink: 0;
   width: 15px;
   height: 15px;
   border-radius: 4px;

@@ -6,7 +6,7 @@ import TestimonyDetail from "@/components/TestimonyDetail";
 import TestimonyForm from "@/components/TestimonyForm";
 import Toast from "@/components/Toast";
 import { AlertIcon, ArrowLeftIcon } from "@/components/icons";
-import { useTestimoniesContext } from "@/hooks/TestimoniesProvider";
+import { useTestimonies } from "@/hooks/useTestimonies";
 import { useTestimony } from "@/hooks/useTestimony";
 import { useToast } from "@/hooks/useToast";
 
@@ -18,7 +18,7 @@ export default function TestimonyDetailPage({
   const { id } = use(params);
   const router = useRouter();
   const { testimony, loading, error, update } = useTestimony(id);
-  const { approve } = useTestimoniesContext();
+  const { approve } = useTestimonies();
   const { message, show } = useToast();
   const [editing, setEditing] = useState(false);
 

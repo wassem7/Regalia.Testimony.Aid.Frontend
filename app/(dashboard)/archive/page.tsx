@@ -7,14 +7,14 @@ import TestimonyForm from "@/components/TestimonyForm";
 import Toast from "@/components/Toast";
 import { AlertIcon, PlusIcon, SearchIcon } from "@/components/icons";
 import { useArchive } from "@/hooks/useArchive";
-import { useTestimoniesContext } from "@/hooks/TestimoniesProvider";
+import { useTestimonies } from "@/hooks/useTestimonies";
 import { useToast } from "@/hooks/useToast";
 import { TESTIMONY_CATEGORIES } from "@/lib/types";
 
 export default function ArchivePage() {
   const router = useRouter();
   const archive = useArchive();
-  const { approve } = useTestimoniesContext();
+  const { approve } = useTestimonies();
   const { message, show } = useToast();
   const [creating, setCreating] = useState(false);
 

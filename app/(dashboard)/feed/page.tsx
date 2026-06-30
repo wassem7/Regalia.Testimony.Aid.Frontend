@@ -1,9 +1,9 @@
 "use client";
 
 import LiveFeed from "@/components/LiveFeed";
-import { useTestimoniesContext } from "@/hooks/TestimoniesProvider";
+import { useTestimonies } from "@/hooks/useTestimonies";
 
 export default function FeedPage() {
-  const { testimonies } = useTestimoniesContext();
+  const { testimonies } = useTestimonies();
   return <LiveFeed testimonies={testimonies} />;
 }

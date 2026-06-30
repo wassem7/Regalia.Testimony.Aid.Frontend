@@ -1,7 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiConfigured, apiFetch } from "@/lib/api";
+import { queryKeys } from "@/lib/queryKeys";
 import { seedTestimonies } from "@/lib/seed";
 import type {
   AdminUpdateTestimonyPayload,
@@ -19,11 +21,9 @@ export interface ArchiveFilters {
 
 const PAGE_SIZE = 12;
 
-interface State {
+interface ArchivePage {
   items: Testimony[];
   total: number;
-  loading: boolean;
-  error: string | null;
 }
 
 /** Filtered seed data for standalone mode (mirrors the backend filters). */
@@ -42,11 +42,29 @@ function filterSeed(filters: ArchiveFilters): Testimony[] {
   });
 }
 
+async function fetchArchive(
+  query: string,
+  filters: ArchiveFilters,
+  page: number,
+): Promise<ArchivePage> {
+  if (!apiConfigured) {
+    await new Promise((r) => setTimeout(r, 400));
+    const all = filterSeed(filters);
+    const start = (page - 1) * PAGE_SIZE;
+    return { items: all.slice(start, start + PAGE_SIZE), total: all.length };
+  }
+  const res = await apiFetch<PagedResult<Testimony>>(
+    `/api/testimony-aid?${query}`,
+  );
+  return { items: res.items, total: res.totalCount };
+}
+
 /**
  * The archive: a searchable/filterable list over ALL testimonies, plus
  * admin create/edit. Falls back to local seed data with no backend.
  */
 export function useArchive() {
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState<ArchiveFilters>({
     search: "",
     category: "",
@@ -54,12 +72,6 @@ export function useArchive() {
     status: "",
   });
   const [page, setPage] = useState(1);
-  const [state, setState] = useState<State>({
-    items: [],
-    total: 0,
-    loading: true,
-    error: null,
-  });
 
   const queryString = useMemo(() => {
     const p = new URLSearchParams();
@@ -72,99 +84,74 @@ export function useArchive() {
     return p.toString();
   }, [filters, page]);
 
-  // Pure loader: everything it needs (the query + seed inputs) is passed in,
-  // so it keeps stable [] deps and never reads/writes refs during render.
-  const load = useCallback(
-    async (
-      query: string,
-      seedFilters: ArchiveFilters,
-      seedPage: number,
-      signal?: { cancelled: boolean },
-    ) => {
-      const commit = (next: State) => {
-        if (!signal?.cancelled) setState(next);
-      };
-
-      if (!apiConfigured) {
-        await new Promise((r) => setTimeout(r, 400));
-        const all = filterSeed(seedFilters);
-        const start = (seedPage - 1) * PAGE_SIZE;
-        commit({
-          items: all.slice(start, start + PAGE_SIZE),
-          total: all.length,
-          loading: false,
-          error: null,
-        });
-        return;
-      }
-
-      try {
-        const res = await apiFetch<PagedResult<Testimony>>(
-          `/api/testimony-aid?${query}`,
-        );
-        commit({ items: res.items, total: res.totalCount, loading: false, error: null });
-      } catch (err) {
-        commit({
-          items: [],
-          total: 0,
-          loading: false,
-          error: err instanceof Error ? err.message : "Failed to load archive",
-        });
-      }
-    },
-    [],
-  );
-
-  // Refetch whenever the query (filters/page) changes.
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void load(queryString, filters, page, signal);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [load, queryString, filters, page]);
-
-  const reload = useCallback(
-    () => load(queryString, filters, page),
-    [load, queryString, filters, page],
-  );
+  const query = useQuery({
+    queryKey: queryKeys.archive(queryString),
+    queryFn: () => fetchArchive(queryString, filters, page),
+    // Keep the previous page's rows visible while the next page loads.
+    placeholderData: (prev) => prev,
+  });
 
   const updateFilters = useCallback((patch: Partial<ArchiveFilters>) => {
     setPage(1);
     setFilters((f) => ({ ...f, ...patch }));
   }, []);
 
-  const create = useCallback(async (payload: CreateTestimonyPayload) => {
-    if (!apiConfigured) return;
-    await apiFetch("/api/testimony-aid", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  }, []);
+  const createMutation = useMutation({
+    mutationFn: async (payload: CreateTestimonyPayload) => {
+      if (!apiConfigured) return;
+      await apiFetch("/api/testimony-aid", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["archive"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.testimonies });
+    },
+  });
 
-  const update = useCallback(
-    async (id: string, payload: AdminUpdateTestimonyPayload) => {
+  const updateMutation = useMutation({
+    mutationFn: async ({
+      id,
+      payload,
+    }: {
+      id: string;
+      payload: AdminUpdateTestimonyPayload;
+    }) => {
       if (!apiConfigured) return;
       await apiFetch(`/api/testimony-aid/${id}`, {
         method: "PATCH",
         body: JSON.stringify(payload),
       });
     },
-    [],
-  );
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["archive"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.testimonies });
+    },
+  });
 
-  const pageCount = Math.max(1, Math.ceil(state.total / PAGE_SIZE));
+  const total = query.data?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return {
-    ...state,
+    items: query.data?.items ?? [],
+    total,
+    loading: query.isLoading,
+    error: query.error
+      ? query.error instanceof Error
+        ? query.error.message
+        : "Failed to load archive"
+      : null,
     filters,
     updateFilters,
     page,
     setPage,
     pageCount,
     pageSize: PAGE_SIZE,
-    reload,
-    create,
-    update,
+    reload: () => query.refetch(),
+    create: (payload: CreateTestimonyPayload) =>
+      createMutation.mutateAsync(payload),
+    update: (id: string, payload: AdminUpdateTestimonyPayload) =>
+      updateMutation.mutateAsync({ id, payload }),
   };
 }

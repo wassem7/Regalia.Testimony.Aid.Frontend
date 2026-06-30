@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Hanken_Grotesk, JetBrains_Mono } from "next/font/google";
+import { QueryProvider } from "@/hooks/QueryProvider";
 import "./globals.css";
 
 const hanken = Hanken_Grotesk({
@@ -29,7 +30,9 @@ export default function RootLayout({
       lang="en"
       className={`${hanken.variable} ${jetbrains.variable} h-full antialiased`}
     >
-      <body>{children}</body>
+      <body>
+        <QueryProvider>{children}</QueryProvider>
+      </body>
     </html>
   );
 }
