@@ -11,25 +11,45 @@ import {
   DocumentIcon,
   PencilIcon,
   ShieldIcon,
+  TrashIcon,
 } from "./icons";
 
 interface Props {
   testimony: Testimony;
   onApprove: (id: string) => Promise<void> | void;
   onEdit?: () => void;
+  /** Provided only for super admins; omit to hide the delete action. */
+  onDelete?: () => Promise<void> | void;
 }
 
 type Stage = "view" | "confirm" | "done";
 
 /** Full-page testimony detail with the view → confirm → done approval flow. */
-export default function TestimonyDetail({ testimony: t, onApprove, onEdit }: Props) {
+export default function TestimonyDetail({
+  testimony: t,
+  onApprove,
+  onEdit,
+  onDelete,
+}: Props) {
   const router = useRouter();
   const [stage, setStage] = useState<Stage>("view");
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const isLive = t.status === "accepted";
 
   const publish = async () => {
     await onApprove(t.id);
     setStage("done");
+  };
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    setDeleting(true);
+    try {
+      await onDelete();
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -197,6 +217,44 @@ export default function TestimonyDetail({ testimony: t, onApprove, onEdit }: Pro
           </div>
         )}
       </div>
+
+      {/* Danger zone — super admins only */}
+      {onDelete && (
+        <div className="dangerzone">
+          <p className="dangerzone-label">Danger zone</p>
+          {!confirmingDelete ? (
+            <button
+              className="btn btn-danger"
+              onClick={() => setConfirmingDelete(true)}
+            >
+              <TrashIcon size={14} />
+              Delete testimony
+            </button>
+          ) : (
+            <div className="dangerbox">
+              <div className="psub m0">
+                Permanently delete this testimony? This cannot be undone.
+              </div>
+              <div className="fx gap10">
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => setConfirmingDelete(false)}
+                  disabled={deleting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-danger"
+                  onClick={handleDelete}
+                  disabled={deleting}
+                >
+                  {deleting ? "Deleting…" : "Yes, delete permanently"}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

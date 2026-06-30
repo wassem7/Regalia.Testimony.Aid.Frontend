@@ -6,6 +6,7 @@ import TestimonyDetail from "@/components/TestimonyDetail";
 import TestimonyForm from "@/components/TestimonyForm";
 import Toast from "@/components/Toast";
 import { AlertIcon, ArrowLeftIcon } from "@/components/icons";
+import { useProfile } from "@/hooks/useProfile";
 import { useTestimonies } from "@/hooks/useTestimonies";
 import { useTestimony } from "@/hooks/useTestimony";
 import { useToast } from "@/hooks/useToast";
@@ -17,10 +18,23 @@ export default function TestimonyDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
-  const { testimony, loading, error, update } = useTestimony(id);
+  const { testimony, loading, error, update, remove } = useTestimony(id);
   const { approve } = useTestimonies();
+  const profile = useProfile();
   const { message, show } = useToast();
   const [editing, setEditing] = useState(false);
+
+  const isSuperAdmin = profile?.role === "Super Admin";
+
+  const handleDelete = async () => {
+    try {
+      await remove();
+      show("Testimony deleted");
+      router.push("/queue");
+    } catch (err) {
+      show(err instanceof Error ? err.message : "Could not delete");
+    }
+  };
 
   const handleApprove = async (tid: string) => {
     try {
@@ -68,6 +82,7 @@ export default function TestimonyDetailPage({
         testimony={testimony}
         onApprove={handleApprove}
         onEdit={() => setEditing(true)}
+        onDelete={isSuperAdmin ? handleDelete : undefined}
       />
 
       {editing && (
@@ -75,7 +90,7 @@ export default function TestimonyDetailPage({
           testimony={testimony}
           onClose={() => setEditing(false)}
           onCreate={async () => {}}
-          onUpdate={async (tid, payload) => {
+          onUpdate={async (_id, payload) => {
             await update(payload);
             show("Testimony updated");
           }}
