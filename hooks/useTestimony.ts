@@ -44,6 +44,17 @@ export function useTestimony(id: string) {
     },
   });
 
+  const removeMutation = useMutation({
+    mutationFn: async () => {
+      if (!apiConfigured) return;
+      await apiFetch(`/api/testimony-aid/${id}`, { method: "DELETE" });
+    },
+    // Drop it from the shared list so the queue/archive update immediately.
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.testimonies });
+    },
+  });
+
   return {
     testimony: query.data ?? null,
     loading: query.isLoading,
@@ -55,5 +66,6 @@ export function useTestimony(id: string) {
     reload: () => query.refetch(),
     update: (payload: AdminUpdateTestimonyPayload) =>
       updateMutation.mutateAsync(payload),
+    remove: () => removeMutation.mutateAsync(),
   };
 }
